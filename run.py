@@ -3,6 +3,7 @@ import os
 import ast
 import re
 from flask import Flask, request, jsonify
+from flask_caching import Cache
 from langchain_community.utilities import SQLDatabase
 from geoalchemy2 import Geometry
 from langchain_community.agent_toolkits import create_sql_agent
@@ -17,54 +18,27 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain.chains import create_sql_query_chain
 from langchain_openai import ChatOpenAI
 
+#cache = Cache()
+
 app = Flask(__name__)
+#app.config['CACHE_TYPE'] = 'simple'
+#cache = Cache(app)
 
 db = SQLDatabase.from_uri('postgresql://pgAdmin:Geost4r%40123@pggeost4r.postgres.database.azure.com:5432/rmnchn')
 
 examples = [
-    {"input": "List all artists. Enumerate every artist. Provide a comprehensive list of artists. Compile a roster of all artists", 
-     "query": "SELECT * FROM Artist;"},
-    {
-        "input": "Find all albums for the artist 'AC/DC'. Retrieve all albums by the artist 'AC/DC'. Locate every album belonging to 'AC/DC'. Find all albums associated with the artist 'AC/DC'",
-        "query": "SELECT * FROM Album WHERE ArtistId = (SELECT ArtistId FROM Artist WHERE Name = 'AC/DC');",
+    {"input": "How many LGAs reported the use of skilled birth attendants in the last quarter? Number of LGAs with skilled birth attendants reported in the latest quarter. Count LGAs with skilled birth attendants in Q4. Total LGAs with skilled birth attendants in the last quarter",
+    "query": "SELECT COUNT(*) AS total_lgas FROM quarter4_scorecard WHERE 'SBA/ Deliveries' > 0;"
     },
-    {
-        "input": "List all tracks in the 'Rock' genre. Enumerate tracks categorized under 'Rock' genre. Provide a list of all 'Rock' genre tracks. Compile a roster of tracks belonging to the 'Rock' genre",
-        "query": "SELECT * FROM Track WHERE GenreId = (SELECT GenreId FROM Genre WHERE Name = 'Rock');",
+    {"input": "Which LGA has the highest number of antenatal visits in the first quarter? LGA with the maximum antenatal visits in Q1. Identify the LGA with the most antenatal visits in Q1. Find the LGA with the highest antenatal visits in the first quarter",
+    "query": "SELECT lganame, SUM('Four antenatal visits/ Expected') AS total_antenatal_visits FROM quarter1_scorecard GROUP BY lganame ORDER BY total_antenatal_visits DESC LIMIT 1;"
     },
-    {
-        "input": "Find the total duration of all tracks. Calculate the cumulative duration of all tracks. Determine the combined length of all tracks. Compute the total duration of all tracks",
-        "query": "SELECT SUM(Milliseconds) FROM Track;",
-    },
-    {
-        "input": "List all customers from Canada. Enumerate all Canadian customers. Provide a list of customers hailing from Canada. Compile a roster of Canadian customers",
-        "query": "SELECT * FROM Customer WHERE Country = 'Canada';",
-    },
-    {
-        "input": "How many tracks are there in the album with ID 5. Determine the number of tracks in the album with ID 5. Find the count of tracks within the album having ID 5. Calculate the total number of tracks present in the album identified by ID 5",
-        "query": "SELECT COUNT(*) FROM Track WHERE AlbumId = 5;",
-    },
-    {
-        "input": "Find the total number of invoices.",
-        "query": "SELECT COUNT(*) FROM Invoice;",
-    },
-     {
-        "input": "List all tracks that are longer than 5 minutes.",
-        "query": "SELECT * FROM Track WHERE Milliseconds > 300000;",
-    },
-    {
-        "input": "Who are the top 5 customers by total purchase?",
-        "query": "SELECT CustomerId, SUM(Total) AS TotalPurchase FROM Invoice GROUP BY CustomerId ORDER BY TotalPurchase DESC LIMIT 5;",
-    },
-    {
-        "input": "Which albums are from the year 2000?",
-        "query": "SELECT * FROM Album WHERE strftime('%Y', ReleaseDate) = '2000';",
-    },
-    {
-        "input": "How many employees are there",
-        "query": 'SELECT COUNT(*) FROM "Employee"',
-    },
-]
+    # {"input": "List the total number of children under 5 who received LLIN across all LGAs. Total number of children under 5 receiving LLIN in all LGAs. Count of children under 5 who received LLIN across LGAs. Sum of children under 5 receiving LLIN in all LGAs",
+    # "query": "SELECT SUM('Children <5 who received LLIN') AS total_children_llin FROM quarter1_scorecard UNION ALL SELECT SUM(\"Children <5 who received LLIN\") AS total_children_llin FROM quarter2_scorecard UNION ALL SELECT SUM(\"Children <5 who received LLIN\") AS total_children_llin FROM quarter3_scorecard UNION ALL SELECT SUM(\"Children <5 who received LLIN\") AS total_children_llin FROM quarter4_scorecard;"
+    # },
+    {"input": "What is the average admission rate for SAM across all LGAs? Average SAM admission rate in all LGAs. Calculate the mean SAM admission rate across LGAs. Find the average SAM admission rate in all LGAs",
+    "query": "SELECT AVG('Admitted for SAM treatment') AS avg_sam_admission_rate FROM quarter1_scorecard UNION ALL SELECT AVG('Admitted for SAM treatment') AS avg_sam_admission_rate FROM quarter2_scorecard UNION ALL SELECT AVG('Admitted for SAM treatment') AS avg_sam_admission_rate FROM quarter3_scorecard UNION ALL SELECT AVG('Admitted for SAM treatment') AS avg_sam_admission_rate FROM quarter4_scorecard;"
+    }]
 
 system_prefix = """You are an agent designed to interact with a SQL database.
 Given an input question from a user, create a syntactically correct {dialect} query to run, then look at the results of the query and return the answer.
@@ -106,6 +80,7 @@ for query in queries:
     results.extend(res)
     
 @app.route('/scorecard/key/<key>/<question>')
+#@cache.memoize(timeout=300)
 def chatbot(key, question):
     os.environ["OPENAI_API_KEY"] = key
     llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
@@ -159,7 +134,6 @@ def chatbot(key, question):
     agent_executor_kwargs={"return_intermediate_steps": True})
     
     # return agent
-    
     res = agent.invoke({"input": question})
     for action, r in res["intermediate_steps"]:
         for message in action.message_log:
@@ -167,10 +141,7 @@ def chatbot(key, question):
                 print(message.content)
     
     print(res['output'])
-    
     return res['output']
-# question = input('ask your question')
-# chatbot(examples, system_prefix, question)
 
 
 if __name__ == '__main__':
